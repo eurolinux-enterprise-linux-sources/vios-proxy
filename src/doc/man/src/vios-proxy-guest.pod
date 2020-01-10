@@ -1,0 +1,277 @@
+=head1 VIOS-PROXY-GUEST
+
+B<vios-proxy-guest> is the QEMU-guest process
+of a network proxy between a QEMU host and QEMU guests. 
+
+=head1 SYNOPSIS
+
+B<vios-proxy-guest> B<[>I<-h> | I<--help>B<]> B<[>I<host_directory> B<[>I<service_port> B<[>I<log_level>B<]]]>
+
+=head1 DESCRIPTION
+
+In a QEMU system, processes in the host need to communicate with processes
+in guests even when there is no network configured between the host and the
+guests. Vios-proxy is a network proxy framework that uses virtioserial 
+channels as the communications pipeline between the host and the guests.
+
+=over 4
+
+=item Virtioserial overview
+
+Virtioserial comprises host device emulation, virtio-pci devices, and drivers that provide
+a chardev interface between the QEMU host and a QEMU guest. A single virtioserial channel
+appears to application software as a domain socket path name in the QEMU host and a file
+handle path name in the QEMU guest. 
+
+Learn more about virtioserial at L<http://fedoraproject.org/wiki/Features/VirtioSerial>
+
+=back
+
+B<vios-proxy-guest> is a process that runs on the QEMU guest. It opens a 
+network socket and listens for connection requests from QEMU guest clients.
+Upon accepting a client connection B<vios-proxy-guest> 
+finds a free virtioserial channel and begins negotiating with the QEMU host for a proxy connection.
+After the connection is accepted by the QEMU host B<vios-proxy-guest> relays data between the service socket 
+to the client and the virtioserial channel going to the host.
+
+B<vios-proxy-guest> is configured with a I<host_directory> path name and a I<service_port> 
+port number. 
+
+=over 4
+
+=item 
+
+The I<host_directory> path name
+identifies a single directory that holds virtioserial end points for channels to the host.
+
+=item 
+
+The
+I<service_port> port number is the localhost port opened by B<vios-proxy-guest>
+for the host service that is being proxied. Note that I<service_port> port number
+is not necessarily the same as the port number of the actual service on the QEMU host.
+
+=back
+
+Only one instance of B<vios-proxy-guest> is allowed per proxied network service.
+
+System administrators may run multiple instances
+of B<vios-proxy-guest>, each configured to provide proxy service for different host services.
+
+B<vios-proxy-guest> assumes exclusive ownership of all virtioserial channels
+in the I<host_directory> path. If multiple instances of B<vios-proxy-guest> are
+run then they must not share I<host_directory> path names.
+
+Virtioserial connections are typically created synchronously with the 
+creation of the QEMU guest VM. 
+B<vios-proxy-guest> does not create virtioserial connections. If
+virtioserial connections are created or destroyed dynamically by some other
+QEMU agent then B<vios-proxy-guest> will recognize the action and use
+or stop using the channels accordingly.
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<-h | --help> 
+
+display a short help text
+
+=item B<[ host_directory>
+
+find virtioserial end points in host_directory instead of F</dev/virtio-ports>
+
+=item B<[ service_port>
+
+listen for localhost connections on service_port instead of 5672
+
+=item B<[ log_level ] ] ]> 
+
+enable logging for given level instead of INFO. Log level choices are FATAL, ALERT, ERROR, WARN, NOTICE, INFO, and DEBUG
+
+=back
+
+=head1 RETURN VALUE
+
+    0 Success
+    1 Failure
+
+=head1 DIAGNOSTICS
+
+=over 4
+
+=item
+    Specify listen port in range 1..65535
+
+FATAL - Illegal port number specified on command line.
+
+=item
+    Failed to create proxy service: 
+
+FATAL - Cannot create network socket.
+
+=item
+    Proxy service fcntl(F_GETFL): 
+
+FATAL - Cannot set network socket to nonblocking.
+
+=item
+    Proxy service fcntl(F_SETFL): 
+
+FATAL - Cannot set network socket to nonblocking.
+
+=item
+    Proxy service bind: 
+
+FATAL - Cannot bind to network socket.
+
+=item
+    Proxy service listen: 
+
+FATAL - Cannot listen to network socket.
+
+=item
+    Root path stat fail: 
+
+FATAL - The command line host_directory is not accessable.
+
+=item
+    Root path is not a directory
+
+FATAL - The command line host_directory is not a directory.
+
+=item
+    Root path open error
+
+FATAL - The command line host_directory can not be opened.
+
+=item
+    fcntl(F_GETFL) on host channel: 
+
+ERROR - Error accessing host file handle
+
+=item
+    fcntl(F_SETFL) on host channel
+
+ERROR - Error accessing host file handle
+
+=item
+    poll()
+
+FATAL - Poller error.
+
+=back
+
+=head1 EXAMPLES
+
+=head2 Configuring QEMU Host and Guest with Virtioserial Ports
+
+=over 4
+
+=item
+This script launches two guest VMs. Each guest VM has three virtiserial ports.
+
+ #!/bin/sh
+ #
+ # Define a common root directory for broker-side channels to guests.
+ #
+ QB_ROOT="/tmp/qpid"
+ #
+ # Launch some number of guests in a loop.
+ #   On the host the channels to the first guest shall be
+ #      /tmp/qpid/guest1/0
+ #      /tmp/qpid/guest1/1
+ #      /tmp/qpid/guest1/2
+ #   Successive guests increment guest1 to guest2, guest3, and so on.
+ #
+ #   On the guest the channels to the host shall be
+ #      /dev/virtio-ports/qpid.0
+ #      /dev/virtio-ports/qpid.1
+ #      /dev/virtio-ports/qpid.2
+ #   The guest-to-host channel names are the same for all guests.
+ #   
+ #
+ for gNameSeq in `seq 1 2`
+ do
+     G_NAME="guest"$gNameSeq
+     mkdir -p ${QB_ROOT}/${G_NAME}
+     qemu-kvm -name "${G_NAME}" -m 192M -smp 2 -snapshot ~chug/v/images/v14a.img \
+ 	-device virtio-serial \
+ 	-chardev socket,path=${QB_ROOT}/${G_NAME}/0,server,nowait,id=${G_NAME}_0 \
+ 	-chardev socket,path=${QB_ROOT}/${G_NAME}/1,server,nowait,id=${G_NAME}_1 \
+ 	-chardev socket,path=${QB_ROOT}/${G_NAME}/2,server,nowait,id=${G_NAME}_2 \
+ 	-device virtserialport,chardev=${G_NAME}_0,name=qpid.0 \
+ 	-device virtserialport,chardev=${G_NAME}_1,name=qpid.1 \
+ 	-device virtserialport,chardev=${G_NAME}_2,name=qpid.2 \
+ 	&
+     PID=$!
+     echo "QEMU ${G_NAME} PID = $PID"
+ done
+
+
+=back
+
+=head2 Launching vios-proxy-guest
+
+=over 4
+
+=item Specifying a directory and port
+
+B<vios-proxy-guest> F</dev/red-service> 6677
+
+=item Specifying a directory, a port, and a log level
+
+B<vios-proxy-guest> F</dev/green-service> 7766 ALERT
+
+=back
+
+=head1 BUGS
+
+=head1 RESTRICTIONS
+
+=over 4
+
+=item Each virtioserial channel carries only one proxy connection.
+
+Data traffic between the QEMU host and QEMU guest across a virtioserial channel
+is limited to one connection at a time. The number of configured
+virtioserial channels between the QEMU host and each QEMU guest is the
+maximum number of simultaneous connections the QEMU guest may have to the proxied service.
+
+=back
+
+=head1 NOTES
+
+=head1 SEE ALSO
+
+=over 4
+
+=item vios-proxy-host
+
+=back
+
+=head1 AUTHOR
+
+Chuck Rolke <crolke@redhat.com>.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2011 by Chuck Rolke <crolke@redhat.com>.
+
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing,
+ software distributed under the License is distributed on an
+ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ KIND, either express or implied.  See the License for the
+ specific language governing permissions and limitations
+ under the License.
+

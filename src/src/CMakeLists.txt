@@ -58,3 +58,5 @@ INSTALL(TARGETS vios_proxy_guest
         DESTINATION bin)
 
 add_subdirectory(test)
+
+INSTALL(FILES ../doc/man/vios-proxy-host.1.gz ../doc/man/vios-proxy-guest.1.gz DESTINATION share/man/man1)

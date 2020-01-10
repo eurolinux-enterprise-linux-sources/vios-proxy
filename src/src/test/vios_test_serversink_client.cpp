@@ -52,7 +52,7 @@ int CHUNK_SIZE      = CHUNK_SIZE_SIZE;
 // set bytes-to-send default
 int g_bytesToSend   = 1000000000;
 
-// allocate the chunk buffe
+// allocate the chunk buffer
 unsigned char buffer[CHUNK_SIZE_SIZE];
 
 // type def of pollFds objects
